@@ -7,3 +7,5 @@
 .faq details[open] summary:after{content:"−"}
 .faq details p{max-width:820px;margin:0;padding:0 48px 25px 0;color:var(--muted);font-size:17px}
 .faq details a{color:var(--blue);font-weight:700;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px}
+footer{align-items:start}
+.footer-brand img{width:175px;height:auto;aspect-ratio:2095/751;object-fit:contain}
