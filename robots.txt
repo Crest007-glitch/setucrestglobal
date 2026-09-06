@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://setucrestglobal.com/sitemap.xml
