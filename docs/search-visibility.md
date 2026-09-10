@@ -19,9 +19,11 @@ Do not add product prices or unsupported delivery promises.
 6. Check GitHub Actions: `pages build and deployment` and `Search discovery`.
 
 `Search discovery` validates metadata and sitemap on pushes and pull requests.
-After a successful main-branch Pages build, it compares that commit with the
-previous successful Pages deployment, including changes across skipped/cancelled
-builds. It verifies the public key and live page content before notifying IndexNow.
+For a main-branch push, notification waits for the matching successful Pages
+build, then compares the commit with the last successful IndexNow notification.
+Changes across failed or skipped notifications are retained. The first run uses
+the pre-update commit in indexnow.json as its baseline. It verifies the public
+key and live page content before notifying IndexNow.
 Layout-only HTML changes and CSS/JavaScript-only changes are not submitted.
 Sitemap freshness still depends on step 4: this workflow does not write commits
 or change the existing GitHub Pages deployment configuration.
@@ -29,7 +31,7 @@ or change the existing GitHub Pages deployment configuration.
 Each hostname has its own public verification file and `indexnow.json` key.
 This key is website-verification material, not a private account credential.
 No new account secret is required. The built-in GitHub token is used with
-read-only permissions solely to find previous successful workflow runs.
+read-only permissions solely to check deployment and notification workflow runs.
 
 If notification fails, inspect its log and rerun that failed Search discovery
 workflow after resolving the problem. Do not rerun unchanged submissions daily.

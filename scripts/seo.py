@@ -212,38 +212,62 @@ def request(url, data=None, headers=None):
             time.sleep(5)
 
 
-def deployment_base(event, head):
-    run = event.get('workflow_run')
-    if not run:
-        raise ValueError('Use --base for a manual dry run; automatic submission requires a completed Pages workflow event.')
-    if run.get('conclusion') != 'success' or run.get('head_branch') != 'main' or run.get('name') != 'pages build and deployment':
-        raise ValueError('Submission requires a successful main-branch Pages build.')
-    if run['head_sha'] != head:
-        raise ValueError('Checkout does not match the deployed commit.')
+def github_headers():
+    return {'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'}
+
+
+def wait_for_deployment(head):
+    if os.environ.get('GITHUB_EVENT_NAME') != 'push' or os.environ.get('GITHUB_REF') != 'refs/heads/main':
+        raise ValueError('Automatic notification requires a main-branch push.')
     repo = os.environ['GITHUB_REPOSITORY']
-    if run.get('head_repository', {}).get('full_name') != repo:
-        raise ValueError('Deployment must originate from this repository.')
-    headers = {'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'}
-    candidates = []
+    url = f'https://api.github.com/repos/{repo}/actions/runs?head_sha={head}&per_page=100'
+    for attempt in range(30):
+        _, text = request(url, headers=github_headers())
+        runs = [r for r in json.loads(text)['workflow_runs']
+                if r['name'] == 'pages build and deployment' and r['head_sha'] == head
+                and r.get('head_branch') == 'main'
+                and r.get('head_repository', {}).get('full_name') == repo]
+        if runs:
+            latest = max(runs, key=lambda r: r['run_number'])
+            if latest['status'] == 'completed':
+                if latest['conclusion'] != 'success':
+                    raise ValueError(f'Pages deployment ended with {latest["conclusion"]}; no URLs submitted.')
+                print(f'Pages deployment succeeded for {head}.')
+                return
+        if attempt < 29:
+            print('Waiting for the matching Pages deployment...', flush=True)
+            time.sleep(10)
+    raise ValueError('Pages deployment has not completed; retry this workflow when publishing finishes.')
+
+
+def notification_base():
+    # A failed/skipped notification must not lose the pages from that deployment.
+    # Advance the comparison baseline only after a successful notification job.
+    repo = os.environ['GITHUB_REPOSITORY']
+    current_id = int(os.environ['GITHUB_RUN_ID'])
+    current_number = int(os.environ['GITHUB_RUN_NUMBER'])
     for page in range(1, 6):
-        url = f'https://api.github.com/repos/{repo}/actions/workflows/{run["workflow_id"]}/runs?branch=main&status=success&per_page=100&page={page}'
-        _, text = request(url, headers=headers)
-        data = json.loads(text)['workflow_runs']
-        candidates.extend(x for x in data if x['id'] != run['id'] and x['run_number'] < run['run_number'])
-        if candidates or len(data) < 100:
+        url = f'https://api.github.com/repos/{repo}/actions/workflows/search-discovery.yml/runs?branch=main&status=success&event=push&per_page=100&page={page}'
+        _, text = request(url, headers=github_headers())
+        runs = json.loads(text)['workflow_runs']
+        candidates = sorted((r for r in runs if r['id'] != current_id and r['run_number'] < current_number),
+                            key=lambda r: r['run_number'], reverse=True)
+        for run in candidates:
+            _, jobs_text = request(f'https://api.github.com/repos/{repo}/actions/runs/{run["id"]}/jobs?filter=latest&per_page=100', headers=github_headers())
+            jobs = json.loads(jobs_text)['jobs']
+            if any(j['name'] == 'notify-indexnow' and j.get('conclusion') == 'success' for j in jobs):
+                return run['head_sha']
+        if len(runs) < 100:
             break
-    if not candidates:
-        raise ValueError('No earlier successful deployment found; refusing to guess the submission range.')
-    previous = max(candidates, key=lambda x: x['run_number'])
-    return previous['head_sha']
+    return json.loads((ROOT / 'indexnow.json').read_text())['bootstrap_base_sha']
 
 
 def notify(base=None, dry_run=False):
     check()
     head = git('rev-parse', 'HEAD')
     if not base:
-        event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())
-        base = deployment_base(event, head)
+        wait_for_deployment(head)
+        base = notification_base()
     if subprocess.run(['git', 'merge-base', '--is-ancestor', base, head], cwd=ROOT).returncode:
         raise ValueError('Earlier deployment is not an ancestor; review the range before submitting.')
     changes = significant_paths(base, head)
@@ -305,7 +329,7 @@ def main():
         check()
     else:
         if args.base and not args.dry_run:
-            parser.error('--base requires --dry-run; real submissions must follow a successful Pages event.')
+            parser.error('--base requires --dry-run; real submissions must follow a successful Pages deployment.')
         notify(args.base, args.dry_run)
 
 
